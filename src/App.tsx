@@ -107,7 +107,7 @@ export default function App(){
     else alert('Saved to cloud.')
   }
 
-  const inputStyle = { padding:6, border:'1px solid var(--border)', borderRadius:8, textAlign:'center' as const }
+  const inputStyle = { padding:10, border:'1px solid var(--border)', borderRadius:10, textAlign:'center' as const, minHeight:'var(--touch)' }
 
   function FieldRow({di,ei,label}:{di:number,ei:number,label:string}){
     const e = state.weeks[week][di][ei]
@@ -125,7 +125,7 @@ export default function App(){
         <div className="col">
           <select value={e.status} onChange={ev=>{
             const next={...state}; next.weeks[week][di][ei].status=ev.target.value as Status; setState(next);
-          }} style={{ padding:6, border:'1px solid var(--border)', borderRadius:8 }}>
+          }} style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, minHeight:'var(--touch)' }}>
             <option>Amazing</option>
             <option>Good</option>
             <option>Bad</option>
@@ -176,8 +176,8 @@ export default function App(){
 
       <div className="footer">
         Optional cloud sync via Supabase.
-        <div style={{marginTop:8, display:'flex', justifyContent:'center', gap:8}}>
-          <input placeholder="email for cloud save (magic link)" value={email} onChange={e=>setEmail(e.target.value)} style={{ padding:6, border:'1px solid var(--border)', borderRadius:8, width:260 }} />
+        <div className="footer-row">
+          <input placeholder="email for cloud save (magic link)" value={email} onChange={e=>setEmail(e.target.value)} style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, width:320, minHeight:'var(--touch)' }} />
           <button className="btn" onClick={cloudSave}>Cloud Save</button>
         </div>
 

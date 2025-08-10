@@ -1,0 +1,1 @@
+Deploy to Vercel. Build `npm run build`, Output `dist`. Supabase env vars optional.
