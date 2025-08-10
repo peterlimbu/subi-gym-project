@@ -1,3 +1,4 @@
+
 import React, { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
@@ -31,11 +32,11 @@ const DAYS = [
     'Side Plank (seconds)'
   ]}
 ]
-const WEEKS = [1,2,3,4,5,6]
+const WEEKS = [1,2,3,4,5,6] as const
 const goalForWeek = (w:number) => `3×${Math.min(10 + (w-1), 15)}`
-const STATUS = ['Amazing','Good','Bad'] as const
+type Status = 'Amazing' | 'Good' | 'Bad'
 
-type Entry = { actual:string; weight:string; status: typeof STATUS[number] }
+type Entry = { actual:string; weight:string; status: Status }
 type WeekState = { [dayIdx:number]: { [exerciseIdx:number]: Entry } }
 type State = { title:string; weeks: { [w:number]: WeekState } }
 
@@ -50,7 +51,7 @@ function createEmpty(): State {
     const wk:any = {}
     DAYS.forEach((d,di)=>{
       const day:any = {}
-      d.exercises.forEach((_,ei)=> day[ei] = { actual:'', weight:'', status:'Bad' })
+      d.exercises.forEach((_,ei)=> day[ei] = { actual:'', weight:'', status:'Bad' as Status })
       wk[di] = day
     })
     weeks[w] = wk
@@ -85,7 +86,7 @@ export default function App(){
     if(!supabase){ alert('Cloud sync is optional. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your host to enable.'); return }
     const { data: auth } = await supabase.auth.getUser()
     if(!auth?.user){
-      const em = email || prompt('Email for magic link?') || ''
+      const em = email || window.prompt('Email for magic link?') || ''
       if(!em) return
       await supabase.auth.signInWithOtp({ email: em })
       alert('Magic link sent. Open it, then reload this page.')
@@ -101,9 +102,12 @@ export default function App(){
         })
       })
     })
-    await supabase.from('entries').upsert(rows, { onConflict:'plan_id,week,day,exercise_index' })
-    alert('Saved to cloud.')
+    const { error } = await supabase.from('entries').upsert(rows, { onConflict:'plan_id,week,day,exercise_index' })
+    if (error) alert('Cloud save error: ' + error.message)
+    else alert('Saved to cloud.')
   }
+
+  const inputStyle = { padding:6, border:'1px solid var(--border)', borderRadius:8, textAlign:'center' as const }
 
   function FieldRow({di,ei,label}:{di:number,ei:number,label:string}){
     const e = state.weeks[week][di][ei]
@@ -114,14 +118,14 @@ export default function App(){
         <div className="col"><span className="pill"><b>{goalForWeek(week)}</b></span></div>
         <div className="col"><input value={e.actual} onChange={ev=>{
           const next={...state}; next.weeks[week][di][ei].actual=ev.target.value; setState(next);
-        }}/></div>
+        }} style={inputStyle} /></div>
         <div className="col"><input value={e.weight} placeholder="kg" onChange={ev=>{
           const next={...state}; next.weeks[week][di][ei].weight=ev.target.value; setState(next);
-        }}/></div>
+        }} style={inputStyle} /></div>
         <div className="col">
           <select value={e.status} onChange={ev=>{
-            const next={...state}; next.weeks[week][di][ei].status=ev.target.value as any; setState(next);
-          }}>
+            const next={...state}; next.weeks[week][di][ei].status=ev.target.value as Status; setState(next);
+          }} style={{ padding:6, border:'1px solid var(--border)', borderRadius:8 }}>
             <option>Amazing</option>
             <option>Good</option>
             <option>Bad</option>
@@ -172,9 +176,16 @@ export default function App(){
 
       <div className="footer">
         Optional cloud sync via Supabase.
-        <div style={{marginTop:8}}>
-          <input placeholder="email for cloud save (magic link)" value={email} onChange={e=>setEmail(e.target.value)} style="padding:6px;border:1px solid var(--border);border-radius:8px;width:260px;margin-right:8px" />
+        <div style={{marginTop:8, display:'flex', justifyContent:'center', gap:8}}>
+          <input placeholder="email for cloud save (magic link)" value={email} onChange={e=>setEmail(e.target.value)} style={{ padding:6, border:'1px solid var(--border)', borderRadius:8, width:260 }} />
           <button className="btn" onClick={cloudSave}>Cloud Save</button>
+        </div>
+
+        <div className="diag">
+          <div><b>Diagnostics</b></div>
+          <div>Supabase URL present: <code>{String(!!supabaseUrl)}</code></div>
+          <div>Supabase anon key present: <code>{String(!!supabaseAnon)}</code></div>
+          <div>Cloud client enabled: <code>{String(!!supabase)}</code></div>
         </div>
       </div>
     </div>
