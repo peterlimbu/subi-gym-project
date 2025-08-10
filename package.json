@@ -1,6 +1,6 @@
 {
-  "name": "mewtwo-webapp-supabase",
-  "version": "1.0.3",
+  "name": "mewtwo-webapp-supabase-pwa-stable",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {

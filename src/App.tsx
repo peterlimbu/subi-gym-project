@@ -1,5 +1,5 @@
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 const DAYS = [
@@ -41,8 +41,11 @@ type WeekState = { [dayIdx:number]: { [exerciseIdx:number]: Entry } }
 type State = { title:string; weeks: { [w:number]: WeekState } }
 
 const STORAGE_KEY = 'mewtwo.web.v1'
+const QUEUE_KEY = 'mewtwo.queue.v1'
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+const baseUrl = (import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined) || window.location.origin
 const supabase = (supabaseUrl && supabaseAnon) ? createClient(supabaseUrl, supabaseAnon) : null
 
 function createEmpty(): State {
@@ -58,18 +61,57 @@ function createEmpty(): State {
   })
   return { title: "Subi's Workout Plan from Peter", weeks }
 }
-
 function load(): State {
   try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : createEmpty() } catch { return createEmpty() }
 }
-function save(s:State){ localStorage.setItem(STORAGE_KEY, JSON.stringify(s)) }
+function saveLocal(s:State){ localStorage.setItem(STORAGE_KEY, JSON.stringify(s)) }
+function loadQueue(){ try{ return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]')}catch{return []} }
+function saveQueue(q:any[]){ localStorage.setItem(QUEUE_KEY, JSON.stringify(q)) }
+
+function useDebounce(callback:(...a:any[])=>void, delay:number){
+  const t = useRef<any>(null)
+  return (...a:any[]) => {
+    if (t.current) clearTimeout(t.current)
+    t.current = setTimeout(() => callback(...a), delay)
+  }
+}
+
+async function getOrCreatePlanId(){
+  if (!supabase) return null;
+  const { data: auth } = await supabase.auth.getUser();
+  const uid = auth?.user?.id;
+  if (!uid) return null;
+
+  const { data: existing } = await supabase
+    .from('plans')
+    .select('id')
+    .eq('user_id', uid)
+    .limit(1)
+    .maybeSingle();
+
+  if (existing?.id) return existing.id;
+
+  const { data: created, error } = await supabase
+    .from('plans')
+    .insert({ user_id: uid })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return created.id;
+}
 
 export default function App(){
   const [state,setState] = useState<State>(()=>load())
   const [week,setWeek] = useState<number>(1)
   const [email,setEmail] = useState('')
+  const [online,setOnline] = useState<boolean>(navigator.onLine)
 
-  useEffect(()=>{ save(state) },[state])
+  useEffect(()=>{ saveLocal(state) },[state])
+  useEffect(()=>{
+    const on = ()=>setOnline(true), off=()=>setOnline(false)
+    window.addEventListener('online', on); window.addEventListener('offline', off)
+    return ()=>{ window.removeEventListener('online', on); window.removeEventListener('offline', off) }
+  }, [])
 
   const total = useMemo(()=>{
     let sum=0
@@ -79,52 +121,80 @@ export default function App(){
     }))
     return sum
   },[state,week])
-
   const barColor = total>0?'var(--green)': total<0?'var(--red)':'var(--yellow)'
 
-  async function cloudSave(){
-    if(!supabase){ alert('Cloud sync is optional. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your host to enable.'); return }
+  async function flushQueue(){
+    if (!supabase) return;
     const { data: auth } = await supabase.auth.getUser()
-    if(!auth?.user){
-      const em = email || window.prompt('Email for magic link?') || ''
-      if(!em) return
-      await supabase.auth.signInWithOtp({ email: em })
-      alert('Magic link sent. Open it, then reload this page.')
-      return
-    }
-    const planId = auth.user.id
-    const rows:any[] = []
-    WEEKS.forEach(w=>{
-      DAYS.forEach((d,di)=>{
-        d.exercises.forEach((name,ei)=>{
-          const e = state.weeks[w][di][ei]
-          rows.push({ plan_id: planId, week:w, day:di+1, exercise_index:ei, exercise:name, goal: goalForWeek(w), actual:e.actual, weight:e.weight, status:e.status })
-        })
-      })
-    })
+    const uid = auth?.user?.id
+    if (!uid) return
+    const planId = await getOrCreatePlanId()
+    if (!planId) return
+
+    const q = loadQueue()
+    if (!q.length) return
+
+    const latest = new Map<string, any>()
+    for (const it of q) latest.set(it.key, it)
+    const rows = Array.from(latest.values()).map((it:any)=> ({
+      plan_id: planId, week: it.week, day: it.day, exercise_index: it.exercise_index,
+      exercise: it.exercise, goal: goalForWeek(it.week), actual: it.actual, weight: it.weight, status: it.status
+    }))
     const { error } = await supabase.from('entries').upsert(rows, { onConflict:'plan_id,week,day,exercise_index' })
-    if (error) alert('Cloud save error: ' + error.message)
-    else alert('Saved to cloud.')
+    if (!error) saveQueue([])
   }
 
-  const inputStyle = { padding:10, border:'1px solid var(--border)', borderRadius:10, textAlign:'center' as const, minHeight:'var(--touch)' }
+  async function cloudLogin(){
+    if(!supabase){ alert('Cloud sync is optional. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your host to enable.'); return }
+    const { data: auth } = await supabase.auth.getUser()
+    if (auth?.user) { await flushQueue(); return }
+    const em = email || window.prompt('Email for magic link?') || ''
+    if(!em) return
+    await supabase.auth.signInWithOtp({ email: em, options: { emailRedirectTo: `${baseUrl}/` } })
+    alert('Magic link sent. Open it, then reload this page.')
+  }
+
+  // stable state update helper to avoid excessive re-renders & input blur on mobile
+  function updateEntry(week:number, di:number, ei:number, patch: Partial<Entry>){
+    setState(prev => {
+      const next = { ...prev }
+      const weekState = { ...(next.weeks[week] || {}) }
+      const dayState  = { ...(weekState[di] || {}) }
+      const entry     = { ...(dayState[ei] || { actual:'', weight:'', status:'Bad' as Status }) }
+      Object.assign(entry, patch)
+      dayState[ei] = entry
+      weekState[di] = dayState
+      next.weeks = { ...next.weeks, [week]: weekState }
+      return next
+    })
+  }
+
+  const saveEntry = useDebounce(async (week:number, di:number, ei:number) => {
+    const e = state.weeks[week][di][ei]
+    const exercise = DAYS[di].exercises[ei]
+    const item = { key:`${week}-${di}-${ei}`, week, day: di+1, exercise_index: ei, exercise,
+      actual: e.actual, weight: e.weight, status: e.status }
+    const q = loadQueue(); q.push(item); saveQueue(q)
+    if (online && supabase) await flushQueue()
+  }, 350)
 
   function FieldRow({di,ei,label}:{di:number,ei:number,label:string}){
     const e = state.weeks[week][di][ei]
     const scoreColor = e.status==='Amazing'?'var(--green)':e.status==='Bad'?'var(--red)':'var(--yellow)'
+    const inputStyle:React.CSSProperties = { padding:10, border:'1px solid var(--border)', borderRadius:10, textAlign:'center', minHeight:'var(--touch)' }
     return (
       <div className="row" style={{background:scoreColor}}>
         <div className="col-ex">{label}</div>
         <div className="col"><span className="pill"><b>{goalForWeek(week)}</b></span></div>
-        <div className="col"><input value={e.actual} onChange={ev=>{
-          const next={...state}; next.weeks[week][di][ei].actual=ev.target.value; setState(next);
+        <div className="col"><input value={e.actual} onInput={(ev:any)=>{
+          updateEntry(week,di,ei,{ actual: ev.target.value }); saveEntry(week,di,ei);
         }} style={inputStyle} /></div>
-        <div className="col"><input value={e.weight} placeholder="kg" onChange={ev=>{
-          const next={...state}; next.weeks[week][di][ei].weight=ev.target.value; setState(next);
+        <div className="col"><input value={e.weight} placeholder="kg" onInput={(ev:any)=>{
+          updateEntry(week,di,ei,{ weight: ev.target.value }); saveEntry(week,di,ei);
         }} style={inputStyle} /></div>
         <div className="col">
-          <select value={e.status} onChange={ev=>{
-            const next={...state}; next.weeks[week][di][ei].status=ev.target.value as Status; setState(next);
+          <select value={e.status} onChange={(ev:any)=>{
+            updateEntry(week,di,ei,{ status: ev.target.value as Status }); saveEntry(week,di,ei);
           }} style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, minHeight:'var(--touch)' }}>
             <option>Amazing</option>
             <option>Good</option>
@@ -150,8 +220,8 @@ export default function App(){
           }; el.click();
         }}>Import JSON</button>
         <button className="btn" onClick={()=>window.print()}>Print</button>
-        {!supabase && <span className="badge">Local-only</span>}
-        {supabase && <span className="badge">Cloud-sync ready</span>}
+        <span className="badge">{navigator.onLine ? 'Online' : 'Offline'}</span>
+        <button className="btn" onClick={cloudLogin}>Cloud Login / Sync</button>
       </div>
 
       <div className="bar" style={{background:barColor}}></div>
@@ -175,17 +245,13 @@ export default function App(){
       </div>
 
       <div className="footer">
-        Optional cloud sync via Supabase.
-        <div className="footer-row">
-          <input placeholder="email for cloud save (magic link)" value={email} onChange={e=>setEmail(e.target.value)} style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, width:320, minHeight:'var(--touch)' }} />
-          <button className="btn" onClick={cloudSave}>Cloud Save</button>
-        </div>
-
         <div className="diag">
           <div><b>Diagnostics</b></div>
           <div>Supabase URL present: <code>{String(!!supabaseUrl)}</code></div>
           <div>Supabase anon key present: <code>{String(!!supabaseAnon)}</code></div>
           <div>Cloud client enabled: <code>{String(!!supabase)}</code></div>
+          <div>App Base URL: <code>{baseUrl}</code></div>
+          <div>Online: <code>{String(online)}</code></div>
         </div>
       </div>
     </div>

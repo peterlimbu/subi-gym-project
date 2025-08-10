@@ -6,8 +6,9 @@
     <meta name="theme-color" content="#ffffff" />
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <title>Mewtwo Planner</title>
+    <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" href="/favicon.ico">
+    <title>Mewtwo Planner</title>
     <style>
       :root {
         --green:#d1fae5; --red:#fee2e2; --yellow:#fef9c3;
@@ -15,7 +16,7 @@
         --radius:14px; --space:clamp(10px, 2vw, 18px);
         --font-base: clamp(14px, 1.2vw, 16px);
         --font-title: clamp(20px, 3vw, 26px);
-        --touch: 44px; /* min tap target */
+        --touch: 44px;
       }
       * { box-sizing: border-box; }
       html, body { height:100%; }
@@ -28,20 +29,17 @@
       }
       .container { max-width: 1400px; margin: 0 auto; padding: calc(var(--space)*1.2); }
       h1 { margin: 0 0 var(--space); font-size: var(--font-title); font-weight: 800; text-align: center; }
-      .toolbar {
-        display:flex; gap: var(--space); justify-content:center; flex-wrap:wrap; margin-bottom: var(--space);
-      }
+      .toolbar { display:flex; gap: var(--space); justify-content:center; flex-wrap:wrap; margin-bottom: var(--space); }
       .btn { padding: 10px 14px; min-height: var(--touch); border:1px solid var(--border); background:#fff; border-radius:12px; cursor:pointer; font-size: var(--font-base); }
       .seg { display:flex; gap: 8px; justify-content:center; flex-wrap:wrap; margin: var(--space) 0; }
       .chip { padding:10px 12px; min-height: var(--touch); border-radius: 12px; background:#eee; cursor:pointer; font-weight:700; user-select:none; }
       .chip.active { background:#111; color:#fff; }
       .bar { height:18px; border-radius:12px; border:1px solid var(--border); margin: 6px 0 calc(var(--space)*1.2); }
       .grid { display:grid; gap: var(--space); }
-      /* Breakpoints tuned for iPhone 14 Pro Max (~430px CSS width) and Samsung Fold folded (~375px) and unfolded (~768px+) */
-      @media (min-width: 0px)   { .grid { grid-template-columns: 1fr; } }          /* phones narrow */
-      @media (min-width: 600px) { .grid { grid-template-columns: repeat(2, 1fr); } }/* Fold portrait / large phones */
-      @media (min-width: 1024px){ .grid { grid-template-columns: repeat(3, 1fr); } }/* tablets / Fold unfolded */
-      @media (min-width: 1280px){ .grid { grid-template-columns: repeat(4, 1fr); } }/* desktops */
+      @media (min-width: 0px)   { .grid { grid-template-columns: 1fr; } }
+      @media (min-width: 600px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+      @media (min-width: 1024px){ .grid { grid-template-columns: repeat(3, 1fr); } }
+      @media (min-width: 1280px){ .grid { grid-template-columns: repeat(4, 1fr); } }
       .card { border:1px solid var(--border); border-radius: var(--radius); padding: var(--space); background:#fff; }
       .card h3 { margin:0 0 8px; font-size: clamp(14px, 1.4vw, 18px); }
       .row.head { display:flex; padding:8px 0; color:var(--muted); font-weight:700; font-size: clamp(12px, 1.1vw, 14px); }
