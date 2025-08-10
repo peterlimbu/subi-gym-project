@@ -1,6 +1,6 @@
 {
-  "name": "mewtwo-webapp-supabase-pwa-stable",
-  "version": "1.2.0",
+  "name": "subi-gym-project",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {

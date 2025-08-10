@@ -1,5 +1,5 @@
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 const DAYS = [
@@ -41,12 +41,10 @@ type WeekState = { [dayIdx:number]: { [exerciseIdx:number]: Entry } }
 type State = { title:string; weeks: { [w:number]: WeekState } }
 
 const STORAGE_KEY = 'mewtwo.web.v1'
-const QUEUE_KEY = 'mewtwo.queue.v1'
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
-const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
-const baseUrl = (import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined) || window.location.origin
-const supabase = (supabaseUrl && supabaseAnon) ? createClient(supabaseUrl, supabaseAnon) : null
+const supabaseUrl = 'https://gibsfeesfqtpkboogscf.supabase.co'
+const supabaseAnon = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpYnNmZWVzZnF0cGtib29nc2NmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ4NjQ3NjUsImV4cCI6MjA3MDQ0MDc2NX0.uwl3HFQPY2QKJxcIyKCBAN5LQK9ZfyA9NDrXA1NhlxA'
+const baseUrl = window.location.origin
+const supabase = createClient(supabaseUrl, supabaseAnon)
 
 function createEmpty(): State {
   const weeks:any = {}
@@ -61,23 +59,12 @@ function createEmpty(): State {
   })
   return { title: "Subi's Workout Plan from Peter", weeks }
 }
-function load(): State {
+function loadLocal(): State {
   try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : createEmpty() } catch { return createEmpty() }
 }
 function saveLocal(s:State){ localStorage.setItem(STORAGE_KEY, JSON.stringify(s)) }
-function loadQueue(){ try{ return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]')}catch{return []} }
-function saveQueue(q:any[]){ localStorage.setItem(QUEUE_KEY, JSON.stringify(q)) }
-
-function useDebounce(callback:(...a:any[])=>void, delay:number){
-  const t = useRef<any>(null)
-  return (...a:any[]) => {
-    if (t.current) clearTimeout(t.current)
-    t.current = setTimeout(() => callback(...a), delay)
-  }
-}
 
 async function getOrCreatePlanId(){
-  if (!supabase) return null;
   const { data: auth } = await supabase.auth.getUser();
   const uid = auth?.user?.id;
   if (!uid) return null;
@@ -101,7 +88,7 @@ async function getOrCreatePlanId(){
 }
 
 export default function App(){
-  const [state,setState] = useState<State>(()=>load())
+  const [state,setState] = useState<State>(()=>loadLocal())
   const [week,setWeek] = useState<number>(1)
   const [email,setEmail] = useState('')
   const [online,setOnline] = useState<boolean>(navigator.onLine)
@@ -113,6 +100,40 @@ export default function App(){
     return ()=>{ window.removeEventListener('online', on); window.removeEventListener('offline', off) }
   }, [])
 
+  async function loadFromCloud(){
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth?.user) return;
+    const planId = await getOrCreatePlanId();
+    if (!planId) return;
+    const { data, error } = await supabase
+      .from('entries')
+      .select('week, day, exercise_index, exercise, goal, actual, weight, status')
+      .eq('plan_id', planId)
+      .order('week')
+      .order('day')
+      .order('exercise_index');
+    if (error || !data) { return; }
+    setState(prev => {
+      const next = { ...prev }
+      data.forEach(row => {
+        const w = row.week as number
+        const di = (row.day as number) - 1
+        const ei = row.exercise_index as number
+        if (!next.weeks[w]) next.weeks[w] = {} as any
+        if (!next.weeks[w][di]) next.weeks[w][di] = {} as any
+        const entry = next.weeks[w][di][ei] || { actual:'', weight:'', status:'Bad' as Status }
+        next.weeks[w][di][ei] = {
+          actual: row.actual ?? entry.actual,
+          weight: row.weight ?? entry.weight,
+          status: (row.status ?? entry.status) as Status
+        }
+      })
+      return next
+    })
+  }
+
+  useEffect(()=>{ loadFromCloud() },[])
+
   const total = useMemo(()=>{
     let sum=0
     DAYS.forEach((_,di)=>DAYS[di].exercises.forEach((__,ei)=>{
@@ -123,60 +144,47 @@ export default function App(){
   },[state,week])
   const barColor = total>0?'var(--green)': total<0?'var(--red)':'var(--yellow)'
 
-  async function flushQueue(){
-    if (!supabase) return;
-    const { data: auth } = await supabase.auth.getUser()
-    const uid = auth?.user?.id
-    if (!uid) return
-    const planId = await getOrCreatePlanId()
-    if (!planId) return
-
-    const q = loadQueue()
-    if (!q.length) return
-
-    const latest = new Map<string, any>()
-    for (const it of q) latest.set(it.key, it)
-    const rows = Array.from(latest.values()).map((it:any)=> ({
-      plan_id: planId, week: it.week, day: it.day, exercise_index: it.exercise_index,
-      exercise: it.exercise, goal: goalForWeek(it.week), actual: it.actual, weight: it.weight, status: it.status
-    }))
-    const { error } = await supabase.from('entries').upsert(rows, { onConflict:'plan_id,week,day,exercise_index' })
-    if (!error) saveQueue([])
-  }
-
   async function cloudLogin(){
-    if(!supabase){ alert('Cloud sync is optional. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your host to enable.'); return }
     const { data: auth } = await supabase.auth.getUser()
-    if (auth?.user) { await flushQueue(); return }
+    if (auth?.user) { await loadFromCloud(); return }
     const em = email || window.prompt('Email for magic link?') || ''
     if(!em) return
     await supabase.auth.signInWithOtp({ email: em, options: { emailRedirectTo: `${baseUrl}/` } })
     alert('Magic link sent. Open it, then reload this page.')
   }
 
-  // stable state update helper to avoid excessive re-renders & input blur on mobile
-  function updateEntry(week:number, di:number, ei:number, patch: Partial<Entry>){
+  async function saveEntry(w:number, di:number, ei:number){
+    const e = state.weeks[w][di][ei]
+    try {
+      const planId = await getOrCreatePlanId()
+      if (!planId) return
+      await supabase.from('entries').upsert([{
+        plan_id: planId,
+        week: w,
+        day: di+1,
+        exercise_index: ei,
+        exercise: DAYS[di].exercises[ei],
+        goal: goalForWeek(w),
+        actual: e.actual,
+        weight: e.weight,
+        status: e.status
+      }], { onConflict: 'plan_id,week,day,exercise_index' })
+    } catch(e) { /* swallow */ }
+  }
+
+  function updateEntry(w:number, di:number, ei:number, patch: Partial<Entry>){
     setState(prev => {
       const next = { ...prev }
-      const weekState = { ...(next.weeks[week] || {}) }
+      const weekState = { ...(next.weeks[w] || {}) }
       const dayState  = { ...(weekState[di] || {}) }
       const entry     = { ...(dayState[ei] || { actual:'', weight:'', status:'Bad' as Status }) }
       Object.assign(entry, patch)
       dayState[ei] = entry
       weekState[di] = dayState
-      next.weeks = { ...next.weeks, [week]: weekState }
+      next.weeks = { ...next.weeks, [w]: weekState }
       return next
     })
   }
-
-  const saveEntry = useDebounce(async (week:number, di:number, ei:number) => {
-    const e = state.weeks[week][di][ei]
-    const exercise = DAYS[di].exercises[ei]
-    const item = { key:`${week}-${di}-${ei}`, week, day: di+1, exercise_index: ei, exercise,
-      actual: e.actual, weight: e.weight, status: e.status }
-    const q = loadQueue(); q.push(item); saveQueue(q)
-    if (online && supabase) await flushQueue()
-  }, 350)
 
   function FieldRow({di,ei,label}:{di:number,ei:number,label:string}){
     const e = state.weeks[week][di][ei]
@@ -186,16 +194,27 @@ export default function App(){
       <div className="row" style={{background:scoreColor}}>
         <div className="col-ex">{label}</div>
         <div className="col"><span className="pill"><b>{goalForWeek(week)}</b></span></div>
-        <div className="col"><input value={e.actual} onInput={(ev:any)=>{
-          updateEntry(week,di,ei,{ actual: ev.target.value }); saveEntry(week,di,ei);
-        }} style={inputStyle} /></div>
-        <div className="col"><input value={e.weight} placeholder="kg" onInput={(ev:any)=>{
-          updateEntry(week,di,ei,{ weight: ev.target.value }); saveEntry(week,di,ei);
-        }} style={inputStyle} /></div>
         <div className="col">
-          <select value={e.status} onChange={(ev:any)=>{
-            updateEntry(week,di,ei,{ status: ev.target.value as Status }); saveEntry(week,di,ei);
-          }} style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, minHeight:'var(--touch)' }}>
+          <input
+            value={e.actual}
+            onChange={(ev:any)=>updateEntry(week,di,ei,{ actual: ev.target.value })}
+            onBlur={()=>saveEntry(week,di,ei)}
+            style={inputStyle} />
+        </div>
+        <div className="col">
+          <input
+            value={e.weight}
+            placeholder="kg"
+            onChange={(ev:any)=>updateEntry(week,di,ei,{ weight: ev.target.value })}
+            onBlur={()=>saveEntry(week,di,ei)}
+            style={inputStyle} />
+        </div>
+        <div className="col">
+          <select
+            value={e.status}
+            onChange={(ev:any)=>{ updateEntry(week,di,ei,{ status: ev.target.value as Status }); }}
+            onBlur={()=>saveEntry(week,di,ei)}
+            style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, minHeight:'var(--touch)' }}>
             <option>Amazing</option>
             <option>Good</option>
             <option>Bad</option>
@@ -221,7 +240,8 @@ export default function App(){
         }}>Import JSON</button>
         <button className="btn" onClick={()=>window.print()}>Print</button>
         <span className="badge">{navigator.onLine ? 'Online' : 'Offline'}</span>
-        <button className="btn" onClick={cloudLogin}>Cloud Login / Sync</button>
+        <input placeholder="email (magic link)" value={email} onChange={e=>setEmail(e.target.value)} style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, minHeight:'var(--touch)' }} />
+        <button className="btn" onClick={cloudLogin}>Cloud Login</button>
       </div>
 
       <div className="bar" style={{background:barColor}}></div>
@@ -249,9 +269,6 @@ export default function App(){
           <div><b>Diagnostics</b></div>
           <div>Supabase URL present: <code>{String(!!supabaseUrl)}</code></div>
           <div>Supabase anon key present: <code>{String(!!supabaseAnon)}</code></div>
-          <div>Cloud client enabled: <code>{String(!!supabase)}</code></div>
-          <div>App Base URL: <code>{baseUrl}</code></div>
-          <div>Online: <code>{String(online)}</code></div>
         </div>
       </div>
     </div>

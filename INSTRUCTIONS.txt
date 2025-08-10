@@ -1,0 +1,16 @@
+Quick Deploy (Bitbucket + Vercel)
+
+1) Upload these files to your Bitbucket repo (empty repo is fine).
+2) On Vercel: New Project -> Import your Bitbucket repo.
+   - Build: npm run build
+   - Output: dist
+3) Open the site URL.
+4) In Supabase -> Authentication -> URL Configuration:
+   - Site URL: your Vercel URL (e.g., https://your-project.vercel.app)
+   - Additional Redirect URLs: your Vercel URL, https://*.vercel.app, http://localhost:5173
+5) Optional: run schema.sql in Supabase SQL Editor once if your tables aren't created yet.
+
+Notes
+- Supabase URL and anon key are prefilled in the app.
+- Save happens on blur (leaving the field). Keyboard stays open while typing on iOS/Android.
+- Auto-load of prior entries happens on login.
