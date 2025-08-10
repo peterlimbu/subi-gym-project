@@ -1,9 +1,0 @@
-{
-  "compilerOptions": {
-    "jsx": "react-native",
-    "target": "es2017",
-    "moduleResolution": "node",
-    "strict": true,
-    "skipLibCheck": true
-  }
-}

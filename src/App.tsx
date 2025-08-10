@@ -1,12 +1,5 @@
-
-import React, { useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, View, Text, TextInput, TouchableOpacity, ScrollView } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined;
-const supabaseAnon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined;
-const supabase = (supabaseUrl && supabaseAnon) ? createClient(supabaseUrl, supabaseAnon) : null;
+import React, { useEffect, useMemo, useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 
 const DAYS = [
   { name: 'Day 1 – Glutes/Quads', exercises: [
@@ -37,183 +30,153 @@ const DAYS = [
     'Dumbbell Shoulder Press',
     'Side Plank (seconds)'
   ]}
-];
+]
+const WEEKS = [1,2,3,4,5,6]
+const goalForWeek = (w:number) => `3×${Math.min(10 + (w-1), 15)}`
+const STATUS = ['Amazing','Good','Bad'] as const
 
-const WEEKS = [1,2,3,4,5,6];
-const goalForWeek = (week: number) => `3×${Math.min(10 + (week - 1), 15)}`;
+type Entry = { actual:string; weight:string; status: typeof STATUS[number] }
+type WeekState = { [dayIdx:number]: { [exerciseIdx:number]: Entry } }
+type State = { title:string; weeks: { [w:number]: WeekState } }
 
-function colorForScore(total: number) {
-  if (total > 0) return '#d1fae5';
-  if (total < 0) return '#fee2e2';
-  return '#fef9c3';
+const STORAGE_KEY = 'mewtwo.web.v1'
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
+const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+const supabase = (supabaseUrl && supabaseAnon) ? createClient(supabaseUrl, supabaseAnon) : null
+
+function createEmpty(): State {
+  const weeks:any = {}
+  WEEKS.forEach(w=>{
+    const wk:any = {}
+    DAYS.forEach((d,di)=>{
+      const day:any = {}
+      d.exercises.forEach((_,ei)=> day[ei] = { actual:'', weight:'', status:'Bad' })
+      wk[di] = day
+    })
+    weeks[w] = wk
+  })
+  return { title: "Subi's Workout Plan from Peter", weeks }
 }
 
-async function signInOrSignUp(email: string) {
-  if (!supabase) throw new Error('Supabase not configured');
-  return supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: 'https://example.com' }});
+function load(): State {
+  try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : createEmpty() } catch { return createEmpty() }
 }
+function save(s:State){ localStorage.setItem(STORAGE_KEY, JSON.stringify(s)) }
 
-export default function App() {
-  const [email, setEmail] = useState('');
-  const [session, setSession] = useState<any>(null);
-  const [planId, setPlanId] = useState<string | null>(null);
-  const [activeWeek, setActiveWeek] = useState<number>(1);
-  const [entries, setEntries] = useState<any[]>([]);
+export default function App(){
+  const [state,setState] = useState<State>(()=>load())
+  const [week,setWeek] = useState<number>(1)
+  const [email,setEmail] = useState('')
 
-  useEffect(() => {
-    (async () => {
-      if (supabase) {
-        const s = await supabase.auth.getSession();
-        setSession(s.data.session);
-        const { data: listener } = supabase.auth.onAuthStateChange((_event, sess) => setSession(sess));
-        return () => listener.subscription.unsubscribe();
-      } else {
-        setSession({ user: { id: 'local' }});
-      }
-    })();
-  }, []);
+  useEffect(()=>{ save(state) },[state])
 
-  useEffect(() => {
-    (async () => {
-      const savedPlan = await AsyncStorage.getItem('planId');
-      if (savedPlan) setPlanId(savedPlan);
-      const savedWeek = await AsyncStorage.getItem('activeWeek');
-      if (savedWeek) setActiveWeek(Number(savedWeek));
-    })();
-  }, []);
+  const total = useMemo(()=>{
+    let sum=0
+    DAYS.forEach((_,di)=>DAYS[di].exercises.forEach((__,ei)=>{
+      const st = state.weeks[week][di][ei].status
+      sum += st==='Amazing'?1: st==='Bad'?-1:0
+    }))
+    return sum
+  },[state,week])
 
-  useEffect(() => { AsyncStorage.setItem('activeWeek', String(activeWeek)); }, [activeWeek]);
+  const barColor = total>0?'var(--green)': total<0?'var(--red)':'var(--yellow)'
 
-  useEffect(() => {
-    (async () => {
-      if (!session) return;
-      if (!planId) {
-        const id = supabase ? await ensurePlanAndSeed(supabase, session.user.id) : 'local-plan';
-        setPlanId(id);
-        await AsyncStorage.setItem('planId', id);
-      }
-    })();
-  }, [session]);
-
-  useEffect(() => {
-    (async () => {
-      if (!planId) return;
-      if (supabase) {
-        const { data } = await supabase.from('entries').select('*').eq('plan_id', planId).eq('week', activeWeek).order('day').order('exercise_index');
-        setEntries(data ?? []);
-      } else {
-        const local = await AsyncStorage.getItem(`entries:${planId}:${activeWeek}`);
-        if (local) setEntries(JSON.parse(local));
-        else {
-          const seeded = seedLocalWeek(activeWeek);
-          setEntries(seeded);
-          await AsyncStorage.setItem(`entries:${planId}:${activeWeek}`, JSON.stringify(seeded));
-        }
-      }
-    })();
-  }, [planId, activeWeek]);
-
-  const weeklyTotal = useMemo(() => entries.reduce((sum, e) => sum + (e.status === 'Amazing' ? 1 : e.status === 'Good' ? 0 : -1), 0), [entries]);
-
-  const grouped = useMemo(() => {
-    const g = {1:[],2:[],3:[],4:[]};
-    entries.forEach((e:any) => { g[e.day].push(e); });
-    return g as Record<number, any[]>;
-  }, [entries]);
-
-  const updateEntry = async (e:any, patch: any) => {
-    const updated = { ...e, ...patch };
-    setEntries(prev => prev.map(x => x.id === e.id ? updated : x));
-    if (supabase) { await supabase.from('entries').update(patch).eq('id', e.id); }
-    else {
-      const list = entries.map(x => x.id === e.id ? updated : x);
-      await AsyncStorage.setItem(`entries:${planId}:${activeWeek}`, JSON.stringify(list));
+  async function cloudSave(){
+    if(!supabase){ alert('Cloud sync is optional. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your host to enable.'); return }
+    const { data: auth } = await supabase.auth.getUser()
+    if(!auth?.user){
+      const em = email || prompt('Email for magic link?') || ''
+      if(!em) return
+      await supabase.auth.signInWithOtp({ email: em })
+      alert('Magic link sent. Open it, then reload this page.')
+      return
     }
-  };
+    const planId = auth.user.id
+    const rows:any[] = []
+    WEEKS.forEach(w=>{
+      DAYS.forEach((d,di)=>{
+        d.exercises.forEach((name,ei)=>{
+          const e = state.weeks[w][di][ei]
+          rows.push({ plan_id: planId, week:w, day:di+1, exercise_index:ei, exercise:name, goal: goalForWeek(w), actual:e.actual, weight:e.weight, status:e.status })
+        })
+      })
+    })
+    await supabase.from('entries').upsert(rows, { onConflict:'plan_id,week,day,exercise_index' })
+    alert('Saved to cloud.')
+  }
 
-  if (supabase && !session) {
+  function FieldRow({di,ei,label}:{di:number,ei:number,label:string}){
+    const e = state.weeks[week][di][ei]
+    const scoreColor = e.status==='Amazing'?'var(--green)':e.status==='Bad'?'var(--red)':'var(--yellow)'
     return (
-      <SafeAreaView style={{ flex:1, padding:16, gap:12 }}>
-        <Text style={{ fontSize:20, fontWeight:'700' }}>Sign in to save your plan</Text>
-        <Text>Use your email. Both of you can sign in; data syncs across devices.</Text>
-        <TextInput placeholder="email@example.com" value={email} onChangeText={setEmail} autoCapitalize='none' keyboardType='email-address' style={{ borderWidth:1, borderColor:'#ddd', borderRadius:8, padding:12 }} />
-        <TouchableOpacity onPress={() => signInOrSignUp(email)} style={{ backgroundColor:'#111', padding:14, borderRadius:10 }}>
-          <Text style={{ color:'#fff', textAlign:'center', fontWeight:'700' }}>Send Magic Link</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
-    );
+      <div className="row" style={{background:scoreColor}}>
+        <div className="col-ex">{label}</div>
+        <div className="col"><span className="pill"><b>{goalForWeek(week)}</b></span></div>
+        <div className="col"><input value={e.actual} onChange={ev=>{
+          const next={...state}; next.weeks[week][di][ei].actual=ev.target.value; setState(next);
+        }}/></div>
+        <div className="col"><input value={e.weight} placeholder="kg" onChange={ev=>{
+          const next={...state}; next.weeks[week][di][ei].weight=ev.target.value; setState(next);
+        }}/></div>
+        <div className="col">
+          <select value={e.status} onChange={ev=>{
+            const next={...state}; next.weeks[week][di][ei].status=ev.target.value as any; setState(next);
+          }}>
+            <option>Amazing</option>
+            <option>Good</option>
+            <option>Bad</option>
+          </select>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <SafeAreaView style={{ flex:1 }}>
-      <ScrollView contentContainerStyle={{ padding:16, gap:12 }}>
-        <Text style={{ fontSize:22, fontWeight:'800', textAlign:'center' }}>Subi's Workout Plan from Peter</Text>
+    <div className="container">
+      <h1>{state.title}</h1>
+      <div className="toolbar">
+        <div className="seg">
+          {WEEKS.map(w=> <div key={w} className={"chip "+(w===week?'active':'')} onClick={()=>setWeek(w)}>Week {w}</div>)}
+        </div>
+        <button className="btn" onClick={()=>{ const next=createEmpty(); setState(next) }}>Reset All</button>
+        <button className="btn" onClick={()=>{ const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify(state)); a.download='mewtwo.json'; a.click(); }}>Export JSON</button>
+        <button className="btn" onClick={()=>{
+          const el=document.createElement('input'); el.type='file'; el.accept='application/json'; el.onchange=(e:any)=>{
+            const f=e.target.files[0]; const r=new FileReader(); r.onload=()=>{ try{ setState(JSON.parse(String(r.result))); }catch{ alert('Bad JSON') }}; r.readAsText(f);
+          }; el.click();
+        }}>Import JSON</button>
+        <button className="btn" onClick={()=>window.print()}>Print</button>
+        {!supabase && <span className="badge">Local-only</span>}
+        {supabase && <span className="badge">Cloud-sync ready</span>}
+      </div>
 
-        <View style={{ flexDirection:'row', gap:8, alignItems:'center', justifyContent:'center', flexWrap:'wrap' }}>
-          {WEEKS.map(w => (
-            <TouchableOpacity key={w} onPress={() => setActiveWeek(w)} style={{ paddingVertical:8, paddingHorizontal:12, borderRadius:10, backgroundColor: activeWeek===w ? '#111' : '#eee' }}>
-              <Text style={{ color: activeWeek===w ? '#fff' : '#111', fontWeight:'700' }}>Week {w}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+      <div className="bar" style={{background:barColor}}></div>
 
-        <View style={{ height:16, borderRadius:10, backgroundColor: colorForScore(weeklyTotal), borderWidth:1, borderColor:'#e5e7eb' }} />
-
-        {[1,2,3,4].map(dayNum => (
-          <View key={dayNum} style={{ borderWidth:1, borderColor:'#eee', borderRadius:14, padding:12, marginTop:12 }}>
-            <Text style={{ fontWeight:'700', marginBottom:8 }}>{`Week ${activeWeek} ${DAYS[dayNum-1].name}`}</Text>
-            <View style={{ flexDirection:'row', paddingVertical:6 }}>
-              <Text style={{ flex:2, fontWeight:'700' }}>Exercise</Text>
-              <Text style={{ flex:1, textAlign:'center', fontWeight:'700' }}>Goal</Text>
-              <Text style={{ flex:1, textAlign:'center', fontWeight:'700' }}>Actual</Text>
-              <Text style={{ flex:1, textAlign:'center', fontWeight:'700' }}>Weight</Text>
-              <Text style={{ flex:1.2, textAlign:'center', fontWeight:'700' }}>Status</Text>
-            </View>
-            {grouped[dayNum]?.map((e:any, idx:number) => {
-              const scoreColor = e.status === 'Amazing' ? '#d1fae5' : e.status === 'Bad' ? '#fee2e2' : '#fef9c3';
-              return (
-                <View key={e.id ?? idx} style={{ flexDirection:'row', alignItems:'center', paddingVertical:6, backgroundColor: scoreColor, borderRadius:8, marginBottom:6, paddingHorizontal:6 }}>
-                  <Text style={{ flex:2 }}>{e.exercise}</Text>
-                  <Text style={{ flex:1, textAlign:'center', fontWeight:'700' }}>{e.goal || goalForWeek(activeWeek)}</Text>
-                  <TextInput value={e.actual ?? ''} onChangeText={(t)=>updateEntry(e,{actual:t})} style={{ flex:1, borderWidth:1, borderColor:'#ddd', borderRadius:8, padding:6, textAlign:'center' }}/>
-                  <TextInput value={e.weight ?? ''} onChangeText={(t)=>updateEntry(e,{weight:t})} placeholder="kg" style={{ flex:1, borderWidth:1, borderColor:'#ddd', borderRadius:8, padding:6, textAlign:'center' }}/>
-                  <View style={{ flex:1.2, flexDirection:'row', gap:6, justifyContent:'center' }}>
-                    {(['Amazing','Good','Bad'] as const).map(s => (
-                      <TouchableOpacity key={s} onPress={()=>updateEntry(e,{status:s})} style={{ paddingVertical:6, paddingHorizontal:8, borderRadius:8, backgroundColor: e.status===s ? '#111' : '#e5e7eb' }}>
-                        <Text style={{ color: e.status===s ? '#fff' : '#111', fontWeight:'700', fontSize:12 }}>{s[0]}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
+      <div className="grid">
+        {DAYS.map((d,di)=>(
+          <div key={d.name} className="card">
+            <h3>{`Week ${week} ${d.name}`}</h3>
+            <div className="row head">
+              <div className="col-ex">Exercise</div>
+              <div className="col">Goal</div>
+              <div className="col">Actual</div>
+              <div className="col">Weight</div>
+              <div className="col">Status</div>
+            </div>
+            {d.exercises.map((ex,ei)=>(
+              <FieldRow key={ex} di={di} ei={ei} label={ex} />
+            ))}
+          </div>
         ))}
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
+      </div>
 
-function seedLocalWeek(week:number) {
-  const list:any[] = [];
-  for (let d=1; d<=4; d++) {
-    const goal = goalForWeek(week);
-    DAYS[d-1].exercises.forEach((name, idx) => {
-      list.push({ id: `${week}-${d}-${idx}`, plan_id: 'local-plan', week, day: d, exercise_index: idx, exercise: name, goal, actual:'', weight:'', status:'Bad' });
-    });
-  }
-  return list;
-}
-
-async function ensurePlanAndSeed(supabase:any, userId:string) {
-  const { data: plan } = await supabase.from('plans').insert({ user_id: userId }).select().single();
-  const id = plan?.id || (await supabase.from('plans').select('id').eq('user_id', userId).single()).data?.id;
-  for (const week of WEEKS) {
-    for (let d=1; d<=4; d++) {
-      const goal = goalForWeek(week);
-      const rows = DAYS[d-1].exercises.map((name, idx) => ({ plan_id: id, week, day: d, exercise_index: idx, exercise: name, goal }));
-      await supabase.from('entries').upsert(rows, { onConflict: 'plan_id,week,day,exercise_index' });
-    }
-  }
-  return id;
+      <div className="footer">
+        Optional cloud sync via Supabase.
+        <div style={{marginTop:8}}>
+          <input placeholder="email for cloud save (magic link)" value={email} onChange={e=>setEmail(e.target.value)} style="padding:6px;border:1px solid var(--border);border-radius:8px;width:260px;margin-right:8px" />
+          <button className="btn" onClick={cloudSave}>Cloud Save</button>
+        </div>
+      </div>
+    </div>
+  )
 }
