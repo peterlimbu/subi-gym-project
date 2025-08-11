@@ -87,6 +87,60 @@ async function getOrCreatePlanId(){
   return created.id;
 }
 
+function FieldRow({di,ei,label,week,state,setState}:{di:number,ei:number,label:string,week:number,state:State,setState:React.Dispatch<React.SetStateAction<State>>}){
+  const [actual, setActual] = React.useState(state.weeks[week][di][ei]?.actual || '')
+  const [weight, setWeight] = React.useState(state.weeks[week][di][ei]?.weight || '')
+  const status = state.weeks[week][di][ei]?.status || 'Bad'
+
+  React.useEffect(()=>{ setActual(state.weeks[week][di][ei]?.actual || '') }, [week, di, ei])
+  React.useEffect(()=>{ setWeight(state.weeks[week][di][ei]?.weight || '') }, [week, di, ei])
+
+  const scoreColor = status==='Amazing'?'var(--green)':status==='Bad'?'var(--red)':'var(--yellow)'
+  const inputStyle:React.CSSProperties = { padding:10, border:'1px solid var(--border)', borderRadius:10, textAlign:'center', minHeight:'var(--touch)' }
+
+  async function savePatch(patch: Partial<Entry>){
+    const planId = await getOrCreatePlanId()
+    if (!planId) return
+    const payload = { ...state.weeks[week][di][ei], ...patch }
+    await supabase.from('entries').upsert([{
+      plan_id: planId, week, day: di+1, exercise_index: ei,
+      exercise: DAYS[di].exercises[ei], goal: goalForWeek(week),
+      actual: payload.actual, weight: payload.weight, status: payload.status
+    }], { onConflict: 'plan_id,week,day,exercise_index' })
+    setState(prev => {
+      const next = { ...prev }
+      const weekState = { ...(next.weeks[week] || {}) }
+      const dayState  = { ...(weekState[di] || {}) }
+      const entry     = { ...(dayState[ei] || { actual:'', weight:'', status:'Bad' as Status }) }
+      Object.assign(entry, payload)
+      dayState[ei] = entry
+      weekState[di] = dayState
+      next.weeks = { ...next.weeks, [week]: weekState }
+      return next
+    })
+  }
+
+  return (
+    <div className="row" style={{background:scoreColor}}>
+      <div className="col-ex">{label}</div>
+      <div className="col"><span className="pill"><b>{goalForWeek(week)}</b></span></div>
+      <div className="col">
+        <input value={actual} onChange={(ev)=>setActual(ev.target.value)} onBlur={()=>savePatch({ actual })} style={inputStyle} />
+      </div>
+      <div className="col">
+        <input value={weight} placeholder="kg" onChange={(ev)=>setWeight(ev.target.value)} onBlur={()=>savePatch({ weight })} style={inputStyle} />
+      </div>
+      <div className="col">
+        <select value={status} onChange={(ev)=>savePatch({ status: ev.target.value as Status })} style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, minHeight:'var(--touch)' }}>
+          <option>Amazing</option>
+          <option>Good</option>
+          <option>Bad</option>
+        </select>
+      </div>
+    </div>
+  )
+}
+
 export default function App(){
   const [state,setState] = useState<State>(()=>loadLocal())
   const [week,setWeek] = useState<number>(1)
@@ -131,7 +185,6 @@ export default function App(){
       return next
     })
   }
-
   useEffect(()=>{ loadFromCloud() },[])
 
   const total = useMemo(()=>{
@@ -151,77 +204,6 @@ export default function App(){
     if(!em) return
     await supabase.auth.signInWithOtp({ email: em, options: { emailRedirectTo: `${baseUrl}/` } })
     alert('Magic link sent. Open it, then reload this page.')
-  }
-
-  async function saveEntry(w:number, di:number, ei:number){
-    const e = state.weeks[w][di][ei]
-    try {
-      const planId = await getOrCreatePlanId()
-      if (!planId) return
-      await supabase.from('entries').upsert([{
-        plan_id: planId,
-        week: w,
-        day: di+1,
-        exercise_index: ei,
-        exercise: DAYS[di].exercises[ei],
-        goal: goalForWeek(w),
-        actual: e.actual,
-        weight: e.weight,
-        status: e.status
-      }], { onConflict: 'plan_id,week,day,exercise_index' })
-    } catch(e) { /* swallow */ }
-  }
-
-  function updateEntry(w:number, di:number, ei:number, patch: Partial<Entry>){
-    setState(prev => {
-      const next = { ...prev }
-      const weekState = { ...(next.weeks[w] || {}) }
-      const dayState  = { ...(weekState[di] || {}) }
-      const entry     = { ...(dayState[ei] || { actual:'', weight:'', status:'Bad' as Status }) }
-      Object.assign(entry, patch)
-      dayState[ei] = entry
-      weekState[di] = dayState
-      next.weeks = { ...next.weeks, [w]: weekState }
-      return next
-    })
-  }
-
-  function FieldRow({di,ei,label}:{di:number,ei:number,label:string}){
-    const e = state.weeks[week][di][ei]
-    const scoreColor = e.status==='Amazing'?'var(--green)':e.status==='Bad'?'var(--red)':'var(--yellow)'
-    const inputStyle:React.CSSProperties = { padding:10, border:'1px solid var(--border)', borderRadius:10, textAlign:'center', minHeight:'var(--touch)' }
-    return (
-      <div className="row" style={{background:scoreColor}}>
-        <div className="col-ex">{label}</div>
-        <div className="col"><span className="pill"><b>{goalForWeek(week)}</b></span></div>
-        <div className="col">
-          <input
-            value={e.actual}
-            onChange={(ev:any)=>updateEntry(week,di,ei,{ actual: ev.target.value })}
-            onBlur={()=>saveEntry(week,di,ei)}
-            style={inputStyle} />
-        </div>
-        <div className="col">
-          <input
-            value={e.weight}
-            placeholder="kg"
-            onChange={(ev:any)=>updateEntry(week,di,ei,{ weight: ev.target.value })}
-            onBlur={()=>saveEntry(week,di,ei)}
-            style={inputStyle} />
-        </div>
-        <div className="col">
-          <select
-            value={e.status}
-            onChange={(ev:any)=>{ updateEntry(week,di,ei,{ status: ev.target.value as Status }); }}
-            onBlur={()=>saveEntry(week,di,ei)}
-            style={{ padding:10, border:'1px solid var(--border)', borderRadius:10, minHeight:'var(--touch)' }}>
-            <option>Amazing</option>
-            <option>Good</option>
-            <option>Bad</option>
-          </select>
-        </div>
-      </div>
-    )
   }
 
   return (
@@ -258,7 +240,7 @@ export default function App(){
               <div className="col">Status</div>
             </div>
             {d.exercises.map((ex,ei)=>(
-              <FieldRow key={ex} di={di} ei={ei} label={ex} />
+              <FieldRow key={ex} di={di} ei={ei} label={ex} week={week} state={state} setState={setState} />
             ))}
           </div>
         ))}
